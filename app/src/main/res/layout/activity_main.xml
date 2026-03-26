@@ -36,6 +36,23 @@
         android:maxLength="11"
         android:layout_marginBottom="12dp" />
 
+    <ImageView
+        android:id="@+id/ivSelectedProfile"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="8dp"
+        android:contentDescription="Selected profile picture"
+        android:scaleType="centerCrop"
+        android:src="@android:drawable/ic_menu_myplaces" />
+
+    <Button
+        android:id="@+id/btnUploadPhoto"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:text="Upload Profile Picture" />
+
 
     <Button
         android:id="@+id/btnSave"
@@ -43,6 +60,21 @@
         android:layout_height="wrap_content"
         android:text="Save Contact"
         android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/etSearch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="10dp"
+        android:hint="Search by name or phone"
+        android:inputType="text" />
+
+    <Button
+        android:id="@+id/btnSort"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:text="Sort A to Z" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerViewContacts"

@@ -1,12 +1,14 @@
 package com.example.contact_app_recycler_view
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.view.LayoutInflater
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
@@ -15,18 +17,27 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener {
     private lateinit var etName: EditText
     private lateinit var etPhone: EditText
+    private lateinit var etSearch: EditText
+    private lateinit var ivSelectedProfile: ImageView
     private lateinit var btnSave: Button
+    private lateinit var btnUploadPhoto: Button
+    private lateinit var btnSort: Button
     private lateinit var btnLoadContacts: Button
     private lateinit var recyclerViewContacts: RecyclerView
 
     private lateinit var contactAdapter: ContactAdapter
     private val contactList = mutableListOf<Contact>()
+    private val displayedContacts = mutableListOf<Contact>()
+    private var isSortAscending = true
+    private var currentSearchQuery = ""
+    private var selectedProfileUri: String? = null
 
     // for contact loading permission request
     private val requestContactsPermission =
@@ -38,6 +49,23 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             }
         }
 
+    private val pickProfileImage =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                selectedProfileUri = uri.toString()
+                ivSelectedProfile.setImageURI(uri)
+
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: SecurityException) {
+                    // Some providers do not allow persistable permissions.
+                }
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -46,7 +74,11 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         // Initialize UI components
         etName = findViewById(R.id.etName)
         etPhone = findViewById(R.id.etPhone)
+        etSearch = findViewById(R.id.etSearch)
+        ivSelectedProfile = findViewById(R.id.ivSelectedProfile)
         btnSave = findViewById(R.id.btnSave)
+        btnUploadPhoto = findViewById(R.id.btnUploadPhoto)
+        btnSort = findViewById(R.id.btnSort)
         btnLoadContacts = findViewById(R.id.btnLoadContacts)
         recyclerViewContacts = findViewById(R.id.recyclerViewContacts)
 
@@ -57,7 +89,7 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         }
 
         // Setup RecyclerView
-        contactAdapter = ContactAdapter(contactList, this)
+        contactAdapter = ContactAdapter(displayedContacts, this)
         recyclerViewContacts.layoutManager = LinearLayoutManager(this)
         recyclerViewContacts.adapter = contactAdapter
 
@@ -66,9 +98,26 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             saveContact()
         }
 
+        btnUploadPhoto.setOnClickListener {
+            pickProfileImage.launch(arrayOf("image/*"))
+        }
+
+        etSearch.doAfterTextChanged { text ->
+            currentSearchQuery = text?.toString()?.trim().orEmpty()
+            applySearchAndSort()
+        }
+
+        btnSort.setOnClickListener {
+            isSortAscending = !isSortAscending
+            btnSort.text = if (isSortAscending) "Sort A to Z" else "Sort Z to A"
+            applySearchAndSort()
+        }
+
         btnLoadContacts.setOnClickListener {
             checkPermissionAndLoadContacts()
         }
+
+        applySearchAndSort()
     }
 
     private fun saveContact() {
@@ -79,15 +128,16 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             return
         }
 
-        val newContact = Contact(name, phone)
+        val newContact = Contact(name = name, phone = phone, photoUri = selectedProfileUri)
         contactList.add(newContact)
-        contactAdapter.notifyItemInserted(contactList.size - 1)
-        recyclerViewContacts.scrollToPosition(contactList.size - 1)
+        applySearchAndSort()
 
         Toast.makeText(this, "Contact saved successfully", Toast.LENGTH_SHORT).show()
 
         etName.text.clear()
         etPhone.text.clear()
+        selectedProfileUri = null
+        ivSelectedProfile.setImageResource(android.R.drawable.ic_menu_myplaces)
         etName.requestFocus()
     }
 
@@ -110,27 +160,25 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         return isValid
     }
 
-    override fun onItemClick(position: Int) {
-        val contact = contactList[position]
+    override fun onItemClick(contact: Contact) {
         Toast.makeText(this, "Contact: ${contact.name}\nPhone: ${contact.phone}", Toast.LENGTH_SHORT).show()
     }
 
-    override fun onEditClick(position: Int) {
-        showEditDialog(position)
+    override fun onEditClick(contact: Contact) {
+        showEditDialog(contact)
     }
 
-    override fun onDeleteClick(position: Int) {
-        showDeleteDialog(position)
+    override fun onDeleteClick(contact: Contact) {
+        showDeleteDialog(contact)
     }
 
-    private fun showDeleteDialog(position: Int) {
+    private fun showDeleteDialog(contact: Contact) {
         AlertDialog.Builder(this)
             .setTitle("Delete Contact")
             .setMessage("Are you sure you want to delete this contact?")
             .setPositiveButton("Yes") { _, _ ->
-                contactList.removeAt(position)
-                contactAdapter.notifyItemRemoved(position)
-                contactAdapter.notifyItemRangeChanged(position, contactList.size)
+                contactList.removeAll { it.id == contact.id }
+                applySearchAndSort()
                 Toast.makeText(this, "Contact deleted", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("No", null)
@@ -166,7 +214,8 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
 
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ContactsContract.CommonDataKinds.Phone.PHOTO_URI
         )
 
         val cursor = contentResolver.query(
@@ -180,13 +229,15 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         cursor?.use {
             val nameIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
             val phoneIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            val photoIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_URI)
 
             while (it.moveToNext()) {
                 val name = it.getString(nameIndex) ?: ""
                 val phone = it.getString(phoneIndex) ?: ""
+                val photoUri = if (photoIndex >= 0) it.getString(photoIndex) else null
 
                 if (name.isNotBlank() && phone.isNotBlank()) {
-                    loadedContacts.add(Contact(name, phone))
+                    loadedContacts.add(Contact(name = name, phone = phone, photoUri = photoUri))
                 }
             }
         }
@@ -198,17 +249,16 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
 
         contactList.clear()
         contactList.addAll(loadedContacts)
-        contactAdapter.notifyDataSetChanged()
+        applySearchAndSort()
 
         Toast.makeText(this, "${loadedContacts.size} contacts loaded", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showEditDialog(position: Int) {
+    private fun showEditDialog(contact: Contact) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.activity_dialog_edit_item, null)
         val etEditName = dialogView.findViewById<EditText>(R.id.etEditName)
         val etEditPhone = dialogView.findViewById<EditText>(R.id.etEditPhone)
 
-        val contact = contactList[position]
         etEditName.setText(contact.name)
         etEditPhone.setText(contact.phone)
 
@@ -228,10 +278,31 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             if (validateInputs(updatedName, updatedPhone, etEditName, etEditPhone)) {
                 contact.name = updatedName
                 contact.phone = updatedPhone
-                contactAdapter.notifyItemChanged(position)
+                applySearchAndSort()
                 Toast.makeText(this, "Contact updated", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
+    }
+
+    private fun applySearchAndSort() {
+        val filteredContacts = if (currentSearchQuery.isBlank()) {
+            contactList
+        } else {
+            contactList.filter {
+                it.name.contains(currentSearchQuery, ignoreCase = true) ||
+                    it.phone.contains(currentSearchQuery, ignoreCase = true)
+            }
+        }
+
+        val sortedContacts = if (isSortAscending) {
+            filteredContacts.sortedBy { it.name.lowercase() }
+        } else {
+            filteredContacts.sortedByDescending { it.name.lowercase() }
+        }
+
+        displayedContacts.clear()
+        displayedContacts.addAll(sortedContacts)
+        contactAdapter.notifyDataSetChanged()
     }
 }
